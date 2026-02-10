@@ -67,7 +67,8 @@ def _get_client_from_env() -> GoogleAdsClient | None:
       "use_proto_plus": True,
   }
 
-  login_customer_id = os.environ.get("GOOGLE_ADS_LOGIN_CUSTOMER_ID")
+  login_customer_id = os.environ.get("GOOGLE_ADS_LOGIN_CUSTOMER_ID", "")
+  login_customer_id = login_customer_id.replace("-", "").strip()
   if login_customer_id:
     config["login_customer_id"] = login_customer_id
 
@@ -104,7 +105,8 @@ def get_ads_client() -> GoogleAdsClient:
           ads_config = yaml.safe_load(f.read())
         dev_token = ads_config.get("developer_token")
     credentials = Credentials(access_token)
-    login_cid = os.environ.get("GOOGLE_ADS_LOGIN_CUSTOMER_ID")
+    login_cid = os.environ.get("GOOGLE_ADS_LOGIN_CUSTOMER_ID", "")
+    login_cid = login_cid.replace("-", "").strip() or None
     return GoogleAdsClient(
         credentials,
         developer_token=dev_token,
