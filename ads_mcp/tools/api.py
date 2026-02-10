@@ -167,3 +167,92 @@ def execute_gaql(
     raise ToolError("\n".join(str(i) for i in e.failure.errors)) from e
 
   return {"data": output}
+
+
+@mcp.tool(
+    output_schema={
+        "type": "object",
+        "properties": {
+            "data": {"type": "array", "items": {"type": "object"}},
+            "query": {"type": "string"},
+        },
+        "required": ["data", "query"],
+    }
+)
+def search_ads(
+    customer_id: str,
+    resource: str,
+    fields: list[str],
+    conditions: list[str] | None = None,
+    orderings: list[str] | None = None,
+    limit: int | None = None,
+    login_customer_id: str | None = None,
+) -> dict[str, Any]:
+  """Searches Google Ads data using structured parameters.
+
+  A convenience wrapper around GAQL that builds the query from
+  individual components, so you don't need to compose GAQL syntax.
+
+  Use `get_reporting_view_doc` to discover available resources and
+  `get_reporting_fields_doc` to discover available fields.
+
+  Args:
+      customer_id: The customer account ID (digits only, no dashes).
+      resource: The resource to query (e.g. 'campaign', 'ad_group',
+          'ad_group_ad', 'keyword_view', 'ad_group_criterion').
+      fields: List of fields to select. Each field must be fully
+          qualified with the resource prefix
+          (e.g. ['campaign.id', 'campaign.name', 'campaign.status',
+          'metrics.impressions', 'metrics.clicks']).
+      conditions: (Optional) List of WHERE conditions, combined with
+          AND (e.g. ["campaign.status = 'ENABLED'",
+          "metrics.impressions > 100",
+          "segments.date BETWEEN '2025-01-01' AND '2025-01-31'"]).
+      orderings: (Optional) List of ORDER BY clauses
+          (e.g. ['metrics.impressions DESC']).
+      limit: (Optional) Maximum number of rows to return. Required
+          for change_event queries (max 10000).
+      login_customer_id: (Optional) The MCC account ID if querying
+          a sub-account.
+
+  Returns:
+      An object with 'data' (array of result rows) and 'query'
+      (the generated GAQL for reference).
+  """
+  query_parts = [f"SELECT {', '.join(fields)} FROM {resource}"]
+
+  if conditions:
+    query_parts.append(f" WHERE {' AND '.join(conditions)}")
+
+  if orderings:
+    query_parts.append(f" ORDER BY {', '.join(orderings)}")
+
+  if limit is not None:
+    query_parts.append(f" LIMIT {limit}")
+
+  query = "".join(query_parts)
+  query = preprocess_gaql(query)
+
+  ads_client = get_ads_client()
+  if login_customer_id:
+    ads_client.login_customer_id = login_customer_id
+  ads_service: GoogleAdsServiceClient = ads_client.get_service(
+      "GoogleAdsService"
+  )
+  try:
+    query_res = ads_service.search_stream(
+        query=query, customer_id=customer_id
+    )
+    output = []
+    for batch in query_res:
+      for row in batch.results:
+        output.append(
+            {
+                i: format_value(get_nested_attr(row, i))
+                for i in batch.field_mask.paths
+            }
+        )
+  except GoogleAdsException as e:
+    raise ToolError("\n".join(str(i) for i in e.failure.errors)) from e
+
+  return {"data": output, "query": query}
