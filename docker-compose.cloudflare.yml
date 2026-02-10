@@ -1,0 +1,55 @@
+version: "3.8"
+
+# =============================================================================
+# Google Ads MCP Server - Cloudflare Zero Trust (External Tunnel)
+# =============================================================================
+#
+# Uses your existing cloudflared container via portainer_tunnel-network.
+#
+# SETUP:
+# 1. Add a public hostname in your existing Cloudflare Tunnel config:
+#    - Subdomain: google-ads (or your choice)
+#    - Domain: your domain
+#    - Service Type: HTTP
+#    - URL: google-ads-mcp:8080
+# 2. Deploy this stack
+#
+# =============================================================================
+
+services:
+  google-ads-mcp:
+    image: ghcr.io/${GITHUB_USERNAME:-digiti}/google_ads_mcp:latest
+    container_name: google-ads-mcp
+    restart: unless-stopped
+    environment:
+      - GOOGLE_ADS_CREDENTIALS=/app/google-ads.yaml
+      - FASTMCP_PORT=8080
+      - FASTMCP_HOST=0.0.0.0
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - TZ=${TZ:-UTC}
+
+    volumes:
+      - ./google-ads.yaml:/app/google-ads.yaml:ro
+
+    healthcheck:
+      test: ["CMD", "python", "-c", "import socket; s=socket.socket(); s.settimeout(5); s.connect(('localhost', 8080)); s.close()"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+
+    networks:
+      - portainer_tunnel-network
+
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 512M
+        reservations:
+          cpus: '0.25'
+          memory: 128M
+
+networks:
+  portainer_tunnel-network:
+    external: true
