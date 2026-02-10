@@ -24,4 +24,4 @@ google-ads.yaml
 
 # Test files
 .coverage
-.pytest_cache
+.pytest_cache.idea/
