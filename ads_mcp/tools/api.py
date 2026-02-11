@@ -135,18 +135,115 @@ def get_ads_client() -> GoogleAdsClient:
   return _ADS_CLIENT
 
 
-@mcp.tool()
-def list_accessible_accounts() -> list[str]:
-  """Lists Google Ads customers id directly accessible by the user.
+def _get_customer_name(ads_client: GoogleAdsClient, customer_id: str) -> str:
+  """Retrieve descriptive_name for a customer ID."""
+  try:
+    ga_service: GoogleAdsServiceClient = ads_client.get_service(
+        "GoogleAdsService"
+    )
+    query = "SELECT customer.descriptive_name FROM customer"
+    response = ga_service.search_stream(query=query, customer_id=customer_id)
+    for batch in response:
+      for row in batch.results:
+        return row.customer.descriptive_name or f"Account {customer_id}"
+    return f"Account {customer_id}"
+  except Exception:
+    return f"Account {customer_id}"
 
-  The accounts can be used as `login_customer_id`.
+
+def _is_manager_account(ads_client: GoogleAdsClient, customer_id: str) -> bool:
+  """Check if a customer account is a manager (MCC)."""
+  try:
+    ga_service: GoogleAdsServiceClient = ads_client.get_service(
+        "GoogleAdsService"
+    )
+    query = "SELECT customer.manager FROM customer"
+    response = ga_service.search_stream(query=query, customer_id=customer_id)
+    for batch in response:
+      for row in batch.results:
+        return bool(row.customer.manager)
+    return False
+  except Exception:
+    return False
+
+
+def _get_sub_accounts(
+    ads_client: GoogleAdsClient, manager_id: str
+) -> list[dict[str, Any]]:
+  """List sub-accounts under a manager account."""
+  try:
+    ga_service: GoogleAdsServiceClient = ads_client.get_service(
+        "GoogleAdsService"
+    )
+    query = (
+        "SELECT customer_client.id, customer_client.descriptive_name, "
+        "customer_client.level, customer_client.manager "
+        "FROM customer_client WHERE customer_client.level > 0"
+    )
+    response = ga_service.search_stream(query=query, customer_id=manager_id)
+    subs = []
+    for batch in response:
+      for row in batch.results:
+        cid = str(row.customer_client.id)
+        subs.append({
+            "id": cid,
+            "name": row.customer_client.descriptive_name or f"Sub-account {cid}",
+            "access_type": "managed",
+            "is_manager": bool(row.customer_client.manager),
+            "parent_id": manager_id,
+            "level": int(row.customer_client.level),
+        })
+    return subs
+  except Exception:
+    return []
+
+
+@mcp.tool()
+def list_accessible_accounts() -> dict[str, Any]:
+  """Lists all accessible Google Ads accounts with hierarchy, names, and manager status.
+
+  Recursively discovers sub-accounts under MCC (manager) accounts.
+  Returns account details including names, hierarchy levels, and parent relationships.
+  The top-level account IDs can be used as `login_customer_id`.
   """
   ads_client = get_ads_client()
   customer_service: CustomerServiceClient = ads_client.get_service(
       "CustomerService"
   )
-  accounts = customer_service.list_accessible_customers().resource_names
-  return [account.split("/")[-1] for account in accounts]
+  resource_names = customer_service.list_accessible_customers().resource_names
+  customer_ids = [name.split("/")[-1] for name in resource_names]
+
+  accounts = []
+  seen: set[str] = set()
+
+  for cid in customer_ids:
+    name = _get_customer_name(ads_client, cid)
+    is_manager = _is_manager_account(ads_client, cid)
+    accounts.append({
+        "id": cid,
+        "name": name,
+        "access_type": "direct",
+        "is_manager": is_manager,
+        "level": 0,
+    })
+    seen.add(cid)
+
+    # Recursively discover sub-accounts under MCC accounts
+    if is_manager:
+      subs = _get_sub_accounts(ads_client, cid)
+      for sub in subs:
+        if sub["id"] not in seen:
+          accounts.append(sub)
+          seen.add(sub["id"])
+          # One more level of nesting for nested MCCs
+          if sub["is_manager"]:
+            nested = _get_sub_accounts(ads_client, sub["id"])
+            for n in nested:
+              if n["id"] not in seen:
+                accounts.append(n)
+                seen.add(n["id"])
+
+  return {"accounts": accounts, "total_accounts": len(accounts)}
 
 
 def preprocess_gaql(query: str) -> str:
