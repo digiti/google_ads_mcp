@@ -14,6 +14,7 @@
 
 """Keyword planner tools for the Google Ads API."""
 
+import datetime
 from typing import Any
 
 from fastmcp.exceptions import ToolError
@@ -21,6 +22,13 @@ from google.ads.googleads.errors import GoogleAdsException
 
 from ads_mcp.coordinator import mcp_server as mcp
 from ads_mcp.tools.api import get_ads_client
+
+
+# Valid month names for the Google Ads API MonthOfYear enum
+_VALID_MONTHS = [
+    "JANUARY", "FEBRUARY", "MARCH", "APRIL", "MAY", "JUNE",
+    "JULY", "AUGUST", "SEPTEMBER", "OCTOBER", "NOVEMBER", "DECEMBER",
+]
 
 
 @mcp.tool()
@@ -31,6 +39,10 @@ def generate_keyword_ideas(
     language_id: str = "1000",
     geo_target_ids: list[str] | None = None,
     login_customer_id: str | None = None,
+    start_year: int | None = None,
+    start_month: str | None = None,
+    end_year: int | None = None,
+    end_month: str | None = None,
 ) -> dict[str, list[dict[str, Any]]]:
   """Generates keyword ideas using seed keywords and optionally a page URL.
 
@@ -41,6 +53,10 @@ def generate_keyword_ideas(
       language_id: Language criterion ID. Defaults to 1000 (English).
       geo_target_ids: Optional geo target IDs.
       login_customer_id: Optional manager account ID containing only digits.
+      start_year: Historical metrics start year (e.g. 2024). Defaults to previous year.
+      start_month: Historical metrics start month (e.g. "JANUARY"). Defaults to JANUARY.
+      end_year: Historical metrics end year (e.g. 2025). Defaults to current year.
+      end_month: Historical metrics end month (e.g. "DECEMBER"). Defaults to current month.
 
   Returns:
       Generated keyword ideas and metrics.
@@ -84,6 +100,25 @@ def generate_keyword_ideas(
       request.keyword_seed.keywords.extend(keywords)
     elif page_url:
       request.url_seed.url = page_url
+
+    # Set historical metrics date range if any date param is provided
+    if any(v is not None for v in [start_year, start_month, end_year, end_month]):
+      now = datetime.datetime.now()
+      s_year = start_year if start_year is not None else now.year - 1
+      s_month = (start_month or "JANUARY").upper()
+      e_year = end_year if end_year is not None else now.year
+      e_month = (end_month or _VALID_MONTHS[now.month - 1]).upper()
+
+      if s_month not in _VALID_MONTHS:
+        raise ToolError(f"Invalid start_month '{s_month}'. Must be one of: {', '.join(_VALID_MONTHS)}")
+      if e_month not in _VALID_MONTHS:
+        raise ToolError(f"Invalid end_month '{e_month}'. Must be one of: {', '.join(_VALID_MONTHS)}")
+
+      month_enum: Any = ads_client.enums.MonthOfYearEnum.MonthOfYear
+      request.historical_metrics_options.year_month_range.start.year = s_year
+      request.historical_metrics_options.year_month_range.start.month = getattr(month_enum, s_month)
+      request.historical_metrics_options.year_month_range.end.year = e_year
+      request.historical_metrics_options.year_month_range.end.month = getattr(month_enum, e_month)
 
     response = keyword_plan_idea_service.generate_keyword_ideas(
         request=request
